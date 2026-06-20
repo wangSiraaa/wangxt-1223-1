@@ -1,0 +1,110 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "城东融雪剂仓库",
+        "code": "WH001",
+        "address": "城东区工业路88号",
+        "manager": "王芳",
+        "capacity_ton": 500,
+        "type": "warehouse"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [116.46, 39.91]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "城西融雪剂仓库",
+        "code": "WH002",
+        "address": "城西区货运大道12号",
+        "manager": "李明",
+        "capacity_ton": 300,
+        "type": "warehouse"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [116.35, 39.925]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "城北应急仓库",
+        "code": "WH003",
+        "address": "城北区应急中心院内",
+        "manager": "张华",
+        "capacity_ton": 200,
+        "type": "warehouse"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [116.41, 39.972]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "第一车队停车场",
+        "type": "fleet",
+        "team": "第一车队"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [116.445, 39.885]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "第二车队停车场",
+        "type": "fleet",
+        "team": "第二车队"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [116.36, 39.905]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "第三车队停车场",
+        "type": "fleet",
+        "team": "第三车队"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [116.42, 39.95]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "市政指挥中心",
+        "type": "command",
+        "phone": "010-88880000"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [116.415, 39.92]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "交警支队一大队",
+        "type": "police",
+        "phone": "010-66661000"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [116.395, 39.945]
+      }
+    }
+  ]
+}
