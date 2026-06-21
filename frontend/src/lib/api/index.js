@@ -69,6 +69,8 @@ export const api = {
     cancel: (id) => request('PUT', `/api/missions/${id}/cancel`),
     start: (id) => request('PUT', `/api/missions/${id}/start`),
     complete: (id, data) => request('PUT', `/api/missions/${id}/complete`, data),
+    replan: (id, data) => request('PUT', `/api/missions/${id}/replan`, data),
+    batchReplan: (data) => request('POST', '/api/missions/batch/replan', data),
   },
   warehouse: {
     warehouses: () => request('GET', '/api/warehouse/warehouses'),
@@ -81,6 +83,7 @@ export const api = {
   },
   closures: {
     list: (params) => request('GET', '/api/closures', params),
+    impactSummary: (params) => request('GET', '/api/closures/impact/summary', params),
     get: (id) => request('GET', `/api/closures/${id}`),
     create: (data) => request('POST', '/api/closures', data),
     update: (id, data) => request('PUT', `/api/closures/${id}`, data),

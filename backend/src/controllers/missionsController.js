@@ -10,9 +10,10 @@ import {
 } from '../services/dispatchRules.js';
 
 export const getMissions = async (ctx) => {
-  const { event_id, road_id, vehicle_id, status, page = 1, pageSize = 50 } = ctx.query;
+  const { event_id, road_id, vehicle_id, status, affected_by_closure, page = 1, pageSize = 50 } = ctx.query;
   let sql = `
     SELECT m.*, r.road_name, r.road_code, r.road_level, r.length_km, r.is_key_route,
+           r.status as road_status,
            v.plate_number, v.vehicle_type, v.salt_capacity_ton, v.current_salt_ton, v.status as vehicle_status,
            w.warehouse_name,
            u.full_name as assigned_by_name
@@ -27,15 +28,50 @@ export const getMissions = async (ctx) => {
   if (road_id) { params.push(road_id); sql += ` AND m.road_id = $${params.length}`; }
   if (vehicle_id) { params.push(vehicle_id); sql += ` AND m.vehicle_id = $${params.length}`; }
   if (status) { params.push(status); sql += ` AND m.status = $${params.length}`; }
+  if (affected_by_closure === 'true') {
+    sql += ` AND (
+      m.status = 'replan_required'
+      OR EXISTS (SELECT 1 FROM road_closures rc WHERE rc.road_id = m.road_id AND rc.status = 'active')
+    )`;
+  }
   sql += ` ORDER BY m.priority ASC, m.created_at DESC
            LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
   params.push(Number(pageSize), (Number(page) - 1) * Number(pageSize));
   const result = await query(sql, params);
-  const countSql = 'SELECT COUNT(*) FROM missions WHERE 1=1' +
-    (event_id ? ' AND event_id = $1' : '') +
-    (road_id ? (event_id ? ' AND road_id = $2' : ' AND road_id = $1') : '') +
-    (vehicle_id ? ` AND vehicle_id = $${event_id && road_id ? '3' : event_id || road_id ? '2' : '1'}` : '') +
-    (status ? ` AND status = $${(event_id ? 1 : 0) + (road_id ? 1 : 0) + (vehicle_id ? 1 : 0) + 1}` : '');
+
+  const roadIds = [...new Set(result.rows.map((m) => m.road_id))];
+  let closuresMap = {};
+  if (roadIds.length > 0) {
+    const placeholders = roadIds.map((_, i) => `$${i + 1}`).join(',');
+    const closuresResult = await query(
+      `SELECT rc.*, r.road_name
+       FROM road_closures rc
+       JOIN roads r ON r.id = rc.road_id
+       WHERE rc.road_id IN (${placeholders}) AND rc.status = 'active'
+       ORDER BY rc.start_time DESC`,
+      roadIds
+    );
+    for (const c of closuresResult.rows) {
+      if (!closuresMap[c.road_id]) closuresMap[c.road_id] = [];
+      closuresMap[c.road_id].push(c);
+    }
+  }
+  const enrichedList = result.rows.map((m) => ({
+    ...m,
+    road_closures: closuresMap[m.road_id] || [],
+    has_active_closure: (closuresMap[m.road_id] || []).length > 0,
+    has_police_closure: (closuresMap[m.road_id] || []).some((c) => c.closure_type === 'police'),
+  }));
+
+  const countSql = 'SELECT COUNT(*) FROM missions m LEFT JOIN roads r ON r.id = m.road_id WHERE 1=1' +
+    (event_id ? ' AND m.event_id = $1' : '') +
+    (road_id ? (event_id ? ' AND m.road_id = $2' : ' AND m.road_id = $1') : '') +
+    (vehicle_id ? ` AND m.vehicle_id = $${event_id && road_id ? '3' : event_id || road_id ? '2' : '1'}` : '') +
+    (status ? ` AND m.status = $${(event_id ? 1 : 0) + (road_id ? 1 : 0) + (vehicle_id ? 1 : 0) + 1}` : '') +
+    (affected_by_closure === 'true' ? ` AND (
+      m.status = 'replan_required'
+      OR EXISTS (SELECT 1 FROM road_closures rc WHERE rc.road_id = m.road_id AND rc.status = 'active')
+    )` : '');
   const countParams = [];
   if (event_id) countParams.push(event_id);
   if (road_id) countParams.push(road_id);
@@ -43,7 +79,7 @@ export const getMissions = async (ctx) => {
   if (status) countParams.push(status);
   const countResult = await query(countSql, countParams);
   success(ctx, {
-    list: result.rows,
+    list: enrichedList,
     total: parseInt(countResult.rows[0].count),
     page: Number(page),
     pageSize: Number(pageSize),
@@ -337,6 +373,128 @@ export const markMissionCompleted = async (ctx) => {
       );
     }
     success(ctx, result.rows[0], '任务已完成');
+    return null;
+  });
+};
+
+export const markReplanRequired = async (ctx) => {
+  const { id } = ctx.params;
+  const { replan_reason } = ctx.request.body || {};
+  const check = await query('SELECT * FROM missions WHERE id = $1', [id]);
+  if (check.rows.length === 0) {
+    notFound(ctx, '任务不存在');
+    return;
+  }
+  const mission = check.rows[0];
+  if (['completed', 'in_progress'].includes(mission.status)) {
+    const statusLabel = mission.status === 'completed' ? '已完成' : mission.status === 'in_progress' ? '作业中' : mission.status;
+    return badRequest(ctx, `当前任务状态为"${statusLabel}"，无法转为待重规划`);
+  }
+  await transaction(async (client) => {
+    const closureCheck = await client.query(
+      `SELECT rc.*, r.road_name
+       FROM road_closures rc
+       JOIN roads r ON r.id = rc.road_id
+       WHERE rc.road_id = $1 AND rc.status = 'active'
+       ORDER BY rc.start_time DESC LIMIT 1`,
+      [mission.road_id]
+    );
+    let finalReason = replan_reason;
+    if (!finalReason && closureCheck.rows.length > 0) {
+      const c = closureCheck.rows[0];
+      finalReason = `道路封控需重新规划：[${c.closure_type === 'police' ? '交警封控' : c.closure_type}] ${c.closure_reason}`;
+    }
+    if (!finalReason) finalReason = '车队长手动标记需重新规划';
+
+    const result = await client.query(
+      `UPDATE missions
+       SET status = 'replan_required', replan_reason = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2 RETURNING *`,
+      [finalReason, id]
+    );
+
+    await client.query(
+      "UPDATE vehicles SET status = 'idle' WHERE id = $1 AND status = 'loading'",
+      [mission.vehicle_id]
+    );
+
+    await createAlert(client, {
+      alert_type: 'road_closed',
+      severity: 'warning',
+      title: `任务需重规划：${result.rows[0].mission_code}`,
+      description: finalReason,
+      event_id: mission.event_id,
+      mission_id: id,
+      road_id: mission.road_id,
+      vehicle_id: mission.vehicle_id,
+    });
+
+    success(ctx, result.rows[0], '任务已转为待重规划状态');
+    return null;
+  });
+};
+
+export const batchMarkReplanRequired = async (ctx) => {
+  const { mission_ids, replan_reason, closure_id } = ctx.request.body || {};
+  if (!Array.isArray(mission_ids) || mission_ids.length === 0) {
+    return badRequest(ctx, '请选择要转待重规划的任务');
+  }
+  const allowedStatuses = ['assigned', 'salt_loaded', 'replan_required'];
+  await transaction(async (client) => {
+    const missionsResult = await client.query(
+      `SELECT m.*, r.road_name, v.plate_number
+       FROM missions m
+       JOIN roads r ON r.id = m.road_id
+       LEFT JOIN vehicles v ON v.id = m.vehicle_id
+       WHERE m.id = ANY($1)`,
+      [mission_ids]
+    );
+    let closureInfo = null;
+    if (closure_id) {
+      const cResult = await client.query(
+        `SELECT rc.*, r.road_name FROM road_closures rc
+         JOIN roads r ON r.id = rc.road_id WHERE rc.id = $1`,
+        [closure_id]
+      );
+      if (cResult.rows.length > 0) closureInfo = cResult.rows[0];
+    }
+    const validMissions = missionsResult.rows.filter((m) => allowedStatuses.includes(m.status));
+    const updated = [];
+    for (const m of validMissions) {
+      let finalReason = replan_reason;
+      if (!finalReason && closureInfo) {
+        finalReason = `道路封控需重新规划：[${closureInfo.closure_type === 'police' ? '交警封控' : closureInfo.closure_type}] ${closureInfo.closure_reason}`;
+      }
+      if (!finalReason) finalReason = '车队长批量标记需重新规划';
+      const r = await client.query(
+        `UPDATE missions
+         SET status = 'replan_required', replan_reason = $1, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $2 RETURNING *`,
+        [finalReason, m.id]
+      );
+      if (r.rows.length > 0) updated.push(r.rows[0]);
+
+      await client.query(
+        "UPDATE vehicles SET status = 'idle' WHERE id = $1 AND status = 'loading'",
+        [m.vehicle_id]
+      );
+
+      await createAlert(client, {
+        alert_type: 'road_closed',
+        severity: 'warning',
+        title: `任务需重规划：${m.mission_code}`,
+        description: finalReason + `（道路：${m.road_name}，车辆：${m.plate_number || '未指定'}）`,
+        event_id: m.event_id,
+        mission_id: m.id,
+        road_id: m.road_id,
+        vehicle_id: m.vehicle_id,
+      });
+    }
+    success(ctx, {
+      updated_count: updated.length,
+      skipped_count: missionsResult.rows.length - validMissions.length,
+      updated_missions: updated,
+    }, `批量处理完成：已转待重规划 ${updated.length} 条，跳过 ${missionsResult.rows.length - validMissions.length} 条`);
     return null;
   });
 };

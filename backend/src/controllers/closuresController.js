@@ -143,3 +143,59 @@ export const updateClosure = async (ctx) => {
   );
   success(ctx, result.rows[0], '封控记录更新成功');
 };
+
+export const getImpactSummary = async (ctx) => {
+  const { event_id } = ctx.query;
+  let eventFilter = '';
+  const params = [];
+  if (event_id) {
+    params.push(event_id);
+    eventFilter = `AND m.event_id = $${params.length}`;
+  }
+  const closuresResult = await query(
+    `SELECT rc.*, r.road_name, r.road_code, r.road_level, r.is_key_route,
+            (SELECT COUNT(*) FROM missions m
+             WHERE m.road_id = rc.road_id
+               AND m.status IN ('assigned', 'salt_loaded', 'replan_required')
+               ${eventFilter}) as affected_mission_count,
+            (SELECT json_agg(json_build_object(
+               'id', m.id, 'mission_code', m.mission_code, 'status', m.status,
+               'plate_number', v.plate_number, 'vehicle_type', v.vehicle_type,
+               'priority', m.priority, 'replan_reason', m.replan_reason
+             ))
+             FROM missions m
+             LEFT JOIN vehicles v ON v.id = m.vehicle_id
+             WHERE m.road_id = rc.road_id
+               AND m.status IN ('assigned', 'salt_loaded', 'replan_required')
+               ${eventFilter}) as affected_missions
+     FROM road_closures rc
+     JOIN roads r ON r.id = rc.road_id
+     WHERE rc.status = 'active'
+     ORDER BY rc.closure_type = 'police' DESC, rc.start_time DESC`,
+    params
+  );
+
+  let activeClosures = closuresResult.rows;
+  let affectedMissionIds = new Set();
+  let policeClosureCount = 0;
+  let roadClosureCount = activeClosures.length;
+
+  for (const c of activeClosures) {
+    if (c.closure_type === 'police') policeClosureCount++;
+    if (c.affected_missions) {
+      for (const m of c.affected_missions) affectedMissionIds.add(m.id);
+    }
+  }
+
+  const policeImpactMissions = activeClosures
+    .filter((c) => c.closure_type === 'police')
+    .reduce((sum, c) => sum + (c.affected_mission_count || 0), 0);
+
+  success(ctx, {
+    active_closures: activeClosures,
+    total_active_closures: roadClosureCount,
+    police_closure_count: policeClosureCount,
+    total_affected_missions: affectedMissionIds.size,
+    police_affected_missions: policeImpactMissions,
+  });
+};

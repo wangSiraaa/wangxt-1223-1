@@ -110,5 +110,30 @@ export const getRoadsWithMissions = async (ctx) => {
     ORDER BY r.priority ASC, r.road_level ASC`;
   const params = [event_id || null];
   const result = await query(sql, params);
-  success(ctx, result.rows);
+
+  const roadIds = result.rows.map((r) => r.id);
+  let closuresMap = {};
+  if (roadIds.length > 0) {
+    const placeholders = roadIds.map((_, i) => `$${i + 1}`).join(',');
+    const closuresResult = await query(
+      `SELECT rc.*, r.road_name
+       FROM road_closures rc
+       JOIN roads r ON r.id = rc.road_id
+       WHERE rc.road_id IN (${placeholders}) AND rc.status = 'active'
+       ORDER BY rc.start_time DESC`,
+      roadIds
+    );
+    for (const c of closuresResult.rows) {
+      if (!closuresMap[c.road_id]) closuresMap[c.road_id] = [];
+      closuresMap[c.road_id].push(c);
+    }
+  }
+
+  const enriched = result.rows.map((r) => ({
+    ...r,
+    active_closures: closuresMap[r.id] || [],
+    has_police_closure: (closuresMap[r.id] || []).some((c) => c.closure_type === 'police'),
+  }));
+
+  success(ctx, enriched);
 };
