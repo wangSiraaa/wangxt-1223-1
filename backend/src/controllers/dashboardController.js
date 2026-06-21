@@ -1,5 +1,5 @@
 import { query } from '../utils/db.js';
-import { success } from '../utils/response.js';
+import { success, badRequest } from '../utils/response.js';
 
 export const getDashboardStats = async (ctx) => {
   const { event_id } = ctx.query;

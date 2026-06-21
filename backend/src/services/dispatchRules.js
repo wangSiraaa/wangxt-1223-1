@@ -1,8 +1,16 @@
-import { query } from '../utils/db.js';
+import { query, transaction } from '../utils/db.js';
 import { generateCode } from '../utils/helpers.js';
 
-export const validateVehicleSaltCapacity = async (vehicleId, roadLengthKm, saltPerKm, lanes) => {
-  const vehicleResult = await query(
+const execQuery = async (client, sql, params) => {
+  if (client) {
+    return await client.query(sql, params);
+  }
+  return await query(sql, params);
+};
+
+export const validateVehicleSaltCapacity = async (vehicleId, roadLengthKm, saltPerKm, lanes, client = null) => {
+  const vehicleResult = await execQuery(
+    client,
     'SELECT * FROM vehicles WHERE id = $1',
     [vehicleId]
   );
@@ -29,8 +37,9 @@ export const validateVehicleSaltCapacity = async (vehicleId, roadLengthKm, saltP
   };
 };
 
-export const validateVehicleCanHandleRoute = async (vehicleId, roadLengthKm) => {
-  const vehicleResult = await query(
+export const validateVehicleCanHandleRoute = async (vehicleId, roadLengthKm, client = null) => {
+  const vehicleResult = await execQuery(
+    client,
     'SELECT * FROM vehicles WHERE id = $1',
     [vehicleId]
   );
@@ -38,7 +47,7 @@ export const validateVehicleCanHandleRoute = async (vehicleId, roadLengthKm) => 
     return { valid: false, reason: '车辆不存在' };
   }
   const vehicle = vehicleResult.rows[0];
-  if (vehicle.max_route_km && Number(roadLengthKm) > Number(vehicle.max_route_km) {
+  if (vehicle.max_route_km && Number(roadLengthKm) > Number(vehicle.max_route_km)) {
     return {
       valid: false,
       reason: `路线里程${roadLengthKm}km超过车辆最大作业里程${vehicle.max_route_km}km`,
@@ -47,8 +56,9 @@ export const validateVehicleCanHandleRoute = async (vehicleId, roadLengthKm) => 
   return { valid: true };
 };
 
-export const checkRoadClosed = async (roadId) => {
-  const closures = await query(
+export const checkRoadClosed = async (roadId, client = null) => {
+  const closures = await execQuery(
+    client,
     `SELECT rc.*, r.road_name, u.username as closed_by_name
      FROM road_closures rc
      JOIN roads r ON r.id = rc.road_id
@@ -61,8 +71,9 @@ export const checkRoadClosed = async (roadId) => {
     : { closed: false, closures: [] };
 };
 
-export const checkKeyRoutesUnassigned = async (eventId) => {
-  const result = await query(
+export const checkKeyRoutesUnassigned = async (eventId, client = null) => {
+  const result = await execQuery(
+    client,
     `SELECT r.*
      FROM roads r
      LEFT JOIN missions m ON m.road_id = r.id
@@ -73,7 +84,7 @@ export const checkKeyRoutesUnassigned = async (eventId) => {
        AND (m.id IS NULL
         OR m.status = 'replan_required')
      GROUP BY r.id
-     HAVING COUNT(m.id) FILTER (WHERE m.status IN ('assigned', 'salt_loaded', 'in_progress') = 0
+     HAVING COUNT(m.id) FILTER (WHERE m.status IN ('assigned', 'salt_loaded', 'in_progress')) = 0
      ORDER BY r.priority ASC, r.road_level ASC`,
     [eventId]
   );
@@ -105,16 +116,15 @@ export const createAlert = async (client, alertData) => {
 };
 
 export const generateAlertsForEvent = async (eventId) => {
-  return await query('BEGIN');
-  try {
-    const unassignedKeyRoutes = await checkKeyRoutesUnassigned(eventId);
+  return await transaction(async (client) => {
+    const unassignedKeyRoutes = await checkKeyRoutesUnassigned(eventId, client);
     const createdAlerts = [];
     for (const road of unassignedKeyRoutes) {
-      const alert = await createAlert({
+      const alert = await createAlert(client, {
         alert_type: 'key_route_unassigned',
         severity: road.priority <= 1 ? 'critical' : 'warning',
         title: `重点道路未派车：${road.road_name}`,
-        description: `道路等级: ${road.road_name} 为重点道路，当前降雪事件下尚未安排作业车辆，请尽快调度。优先级: ${road.priority}`,
+        description: `道路: ${road.road_name} 为重点道路，当前降雪事件下尚未安排作业车辆，请尽快调度。优先级: ${road.priority}`,
         event_id: eventId,
         road_id: road.id,
         related_data: {
@@ -126,18 +136,17 @@ export const generateAlertsForEvent = async (eventId) => {
       });
       createdAlerts.push(alert);
     }
-    await query('COMMIT');
     return createdAlerts;
-  } catch (e) {
-    await query('ROLLBACK');
-    throw e;
-  }
+  });
 };
 
-export const checkInventoryLow = async () => {
-  const result = await query(
+export const checkInventoryLow = async (client = null) => {
+  const result = await execQuery(
+    client,
     `SELECT w.id as warehouse_id, w.warehouse_name, i.salt_type, i.quantity_ton, w.capacity_ton,
-     CASE WHEN w.capacity_ton IS NOT NULL THEN i.quantity_ton / w.capacity_ton < 0.15 THEN TRUE ELSE FALSE END as is_low
+     CASE WHEN w.capacity_ton IS NOT NULL AND i.quantity_ton / w.capacity_ton < 0.15 THEN TRUE
+          WHEN i.quantity_ton < 20 THEN TRUE
+          ELSE FALSE END as is_low
      FROM salt_inventory i
      JOIN warehouses w ON w.id = i.warehouse_id
      WHERE i.quantity_ton < 20

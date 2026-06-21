@@ -102,7 +102,7 @@ export const runAlertChecks = async (ctx) => {
   const newAlerts = [];
   await transaction(async (client) => {
     if (event_id) {
-      const unassigned = await checkKeyRoutesUnassigned(event_id);
+      const unassigned = await checkKeyRoutesUnassigned(event_id, client);
       for (const road of unassigned) {
         const existing = await client.query(
           `SELECT id FROM alerts WHERE alert_type = 'key_route_unassigned'
@@ -123,7 +123,7 @@ export const runAlertChecks = async (ctx) => {
         }
       }
     }
-    const lowInventory = await checkInventoryLow();
+    const lowInventory = await checkInventoryLow(client);
     for (const inv of lowInventory) {
       const existing = await client.query(
         `SELECT id FROM alerts WHERE alert_type = 'inventory_low'

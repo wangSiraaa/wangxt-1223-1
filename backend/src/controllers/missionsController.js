@@ -1,5 +1,5 @@
 import { query, transaction } from '../utils/db.js';
-import { success, badRequest, notFound } from '../utils/response.js';
+import { success, error, badRequest, notFound } from '../utils/response.js';
 import { generateCode } from '../utils/helpers.js';
 import {
   validateVehicleSaltCapacity,
@@ -113,7 +113,7 @@ export const createMission = async (ctx) => {
       return badRequest(ctx, '道路不存在');
     }
     const road = roadResult.rows[0];
-    const closureCheck = await checkRoadClosed(body.road_id);
+    const closureCheck = await checkRoadClosed(body.road_id, client);
     if (closureCheck.closed) {
       return badRequest(ctx, `道路已被封控，请重新规划。原因：${closureCheck.closures[0]?.closure_reason || '未知'}`);
     }
@@ -122,7 +122,8 @@ export const createMission = async (ctx) => {
       body.vehicle_id,
       road.length_km,
       road.salt_per_km,
-      road.lanes
+      road.lanes,
+      client
     );
     if (!capacityCheck.valid) {
       await createAlert(client, {
@@ -136,7 +137,7 @@ export const createMission = async (ctx) => {
       });
       return badRequest(ctx, capacityCheck.reason + '，请先到仓库装盐或更换车辆');
     }
-    const rangeCheck = await validateVehicleCanHandleRoute(body.vehicle_id, road.length_km);
+    const rangeCheck = await validateVehicleCanHandleRoute(body.vehicle_id, road.length_km, client);
     if (!rangeCheck.valid) {
       return badRequest(ctx, rangeCheck.reason);
     }

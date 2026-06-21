@@ -1,5 +1,5 @@
 import { query, transaction } from '../utils/db.js';
-import { success, badRequest, notFound } from '../utils/response.js';
+import { success, error, badRequest, notFound } from '../utils/response.js';
 import { generateCode } from '../utils/helpers.js';
 import { replanMissionsOnRoadClosure } from '../services/dispatchRules.js';
 
